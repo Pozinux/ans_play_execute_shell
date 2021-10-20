@@ -1,0 +1,154 @@
+---
+
+# -------------------------------------------------------------------------------------------------------------------------
+# Lorsque l'on met les commandes directement dans le playbook (et non en extra vars) alors on peut exécuter comme suivant :
+# -------------------------------------------------------------------------------------------------------------------------
+# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l "SERVERNAME1, SERVERNAME2" -e "my_mode=commands_in_playbook"
+
+# ------------------------------------------------------------------------------------------------------------------------------------
+# Lorsque l'on passe une commande (en extra vars et sans espaces, caractères spéciaux ou guillemets), on peut exécuter comme suivant :
+# ------------------------------------------------------------------------------------------------------------------------------------
+# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l Red_Hat_Enterprise_Linux_7* -f 100 -e "my_command=smbstatus"
+# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l SERVERNAME -e "my_command=smbstatus"
+
+# Si la commande contient des espaces (ici les espaces entre les pipes par exemple), il faut la mettre entre simples quotes
+# Si la commande contient des caractères spéciaux (ici le $ du awk) il faut l'échapper avec "\"
+# Si la variable contient des simple quotes, il m'a fallu échapper ceux du awk mais pas ceux grep 
+# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l SERVERNAME -e "my_command='lscpu | grep -e '^CPU(s)' | awk \'{print \$2}\''"
+
+# /!\ on ne peut pas mettre dans une ligne plusieurs commandes séparées par ";" ou "&&". Plusieurs commandes = plusieurs lignes
+
+# --------------------------------------------------------------
+# Lorsque l'on passe un script, on peut exécuter comme suivant :
+# --------------------------------------------------------------
+# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l "SERVERNAME1, SERVERNAME2" -e "my_remote_template_script_name=TEMPLATE_SCRIPT_NAME.sh" -e "my_list_users='\'USER1 USER2\''"
+
+# ----------------------------------------------------------------------------------------------------------------------------
+
+- name: "Playbook to execute a shell command and fetch log file per server"
+  hosts: all
+  vars:
+    target_dir_temp: "/temp/target_log"
+    remote_scripts_path: "remote_scripts"
+  gather_facts: no
+
+  tasks:
+
+  - name: "Execute commande"
+    ansible.builtin.shell: "id -un" # Afin de récupérer le nom du user exécutant le playbook pour pouoir copier dans son home les résultats
+    register: result  
+    delegate_to: localhost
+    run_once: yes
+
+  # - name: "DEBUG"
+  #   ansible.builtin.debug:
+  #     var: result.stdout
+  #   run_once: yes
+
+  - name: "Set path for result log files on ansible server"
+    set_fact:
+      results_folder_ansible: "/home/{{ result.stdout }}/results/"
+    run_once: yes
+
+  - name: "Ensure ansible directory exists" 
+    file:
+      path: "{{ results_folder_ansible }}"
+      state: directory
+      mode: '0770'
+    delegate_to: localhost
+    run_once: yes
+  
+  - name: "Ensure target directory exists" 
+    file:
+      path: "{{ target_dir_temp }}"
+      state: directory
+      mode: '0777'
+    tags: create
+    become: yes
+
+  - name: "Add something to log file (like hostname or date)"
+    ansible.builtin.shell: |
+      echo -e "\n\e[0;32m--- $(hostname) - $(date +%Y%m%d%H%M%S) ---\e[0;m\n" >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1
+  
+  - name: "Execute commande shell"
+    ansible.builtin.shell: "{{ my_command }} >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1" # Note : inventory_hostname_short est une variable speciale ansible
+    register: result_command_extravars 
+    ignore_errors: yes  # Pour ne pas que le play soit quitté sur une erreur (par exemple il ne trouve pas la cde sur le serveur)
+    become: yes
+    when: my_command is defined and my_mode is undefined
+
+  - name: "Debug my_command"
+    ansible.builtin.debug: 
+      var: my_command
+    when: my_command is defined and my_mode is undefined
+
+  - name: "Debug result_command_extravars"
+    ansible.builtin.debug: 
+      var: result_command_extravars
+    when: my_command is defined and my_mode is undefined
+
+  # - name: "Copy script to remote"
+  #   ansible.builtin.copy: src={{ remote_scripts_path }}/{{ my_remote_script_name }} dest={{ target_dir_temp }}/{{ my_remote_script_name }} mode=0777
+  #   when: my_command is undefined and my_remote_script_name is defined
+
+  - name: "Copy script TEMPLATE to remote"
+    ansible.builtin.template: 
+      src: "{{ my_remote_template_script_name }}"
+      dest: "{{ target_dir_temp }}/{{ my_remote_template_script_name }}"
+      mode: "0777"
+      force: yes
+    when: my_command is undefined and my_remote_template_script_name is defined
+
+  - name: "Execute {{ my_remote_template_script_name }}"
+    ansible.builtin.shell: "{{ target_dir_temp }}/{{ my_remote_template_script_name }} >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1" 
+    register: result_remote_template_script 
+    ignore_errors: yes  # Pour ne pas que le play soit quitté sur une erreur (par exemple il ne trouve pas la cde sur le serveur)
+    become: yes
+    when: my_command is undefined and my_remote_template_script_name is defined
+
+  - name: "Debug result_remote_template_script"
+    ansible.builtin.debug: 
+      var: result_remote_template_script
+    when: my_command is undefined and my_remote_template_script_name is defined
+
+  - name: "Execute several commands shell"
+    ansible.builtin.shell: |
+      lscpu | grep -e '^CPU(s)' | awk '{print "CPU : " $2}' >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1
+      free -h | grep Mem | awk '{print "Mémoire : " $2}' >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1 
+      free -h | grep Swap | awk '{print "Swap : " $2}' >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1
+      echo >>{{ target_dir_temp }}/{{ inventory_hostname_short }}.log 2>&1 
+    register: result_several_commands 
+    ignore_errors: yes  # Pour ne pas que le play soit quitté sur une erreur (par exemple il ne trouve pas la cde sur le serveur)
+    become: yes
+    when: my_command is undefined and my_mode is defined and my_mode == "commands_in_playbook"
+
+  - name: "Debug result_several_commands"
+    ansible.builtin.debug: 
+      var: result_several_commands
+    when: my_command is undefined and my_mode is defined and my_mode == "commands_in_playbook"
+
+  - name: "Change file permissions"
+    file:
+      path: "{{ target_dir_temp }}/{{ inventory_hostname_short }}.log"
+      state: file
+      mode: '0775'
+    become: yes
+
+  - name: "Get file from target host"
+    fetch:
+      src: "{{ target_dir_temp }}/{{ inventory_hostname_short }}.log"
+      dest: "{{ results_folder_ansible }}/{{ inventory_hostname_short }}.log"
+      flat: yes
+    when: result.rc == 0
+
+  - name: "Ensure target directory does not exist anymore" 
+    file:
+      path: "{{ target_dir_temp }}"
+      state: absent
+    become: yes
+
+  - name: Message à l'utilisateur - Chemin du résultat
+    ansible.builtin.set_stats:
+        data:
+          message: "Le resultat se trouve dans {{ results_folder_ansible }} sur le serveur Ansible"
+    run_once: yes
