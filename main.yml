@@ -21,7 +21,7 @@
 # --------------------------------------------------------------
 # Lorsque l'on passe un script, on peut exécuter comme suivant :
 # --------------------------------------------------------------
-# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l "SERVERNAME1, SERVERNAME2" -e "my_remote_template_script_name=TEMPLATE_SCRIPT_NAME.sh" -e "my_list_users='\'USER1 USER2\''"
+# ansible-playbook main.yml -i INVENTORIES_FILES_PATH/INVENTORY_FILE_NAME.yml -l "SERVERNAME1, SERVERNAME2" -e "my_remote_template_script_name=TEMPLATE_SCRIPT_NAME.sh"
 
 # ----------------------------------------------------------------------------------------------------------------------------
 
